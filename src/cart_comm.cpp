@@ -1,12 +1,12 @@
 #include "hm05.hpp"
 
 #define CHIP_VENDOR  0x0403
-#define CHIP_PRODUCT 0x6001
+#define CHIP_PRODUCT 0x6010
 
 #define CALL_FTDI(CMD, ERROR, ...)                                             \
   {                                                                            \
     int ret;                                                                   \
-    if ((ret = CMD(ftdi __VA_OPT__(, ) __VA_ARGS__)) != 0) {                   \
+    if ((ret = CMD(ftdi, ##__VA_ARGS__)) < 0) {                                \
       logMessage(                                                              \
         LOG_ERROR, "%s: %d (%s)\n", ERROR, ret, ftdi_get_error_string(ftdi));  \
       ftdi_usb_close(ftdi);                                                    \
@@ -16,7 +16,7 @@
   }
 
 #define flushOut()                                                             \
-  if (flushOut_(ftdi) != 0) {                                                  \
+  if (flushOut_(ftdi) < 0) {                                                   \
     return -1;                                                                 \
   }
 
@@ -33,10 +33,11 @@ inline int flushOut_(struct ftdi_context *ftdi) {
   CALL_FTDI(
     ftdi_write_data, "Unable to write data to device", outBuffer, outBufferPos);
   outBufferPos = 0;
+  return 0;
 }
 
 #define readSync(DST, NBYTES)                                                  \
-  if (readSync_(ftdi, (DST), (NBYTES)) != 0) {                                 \
+  if (readSync_(ftdi, (DST), (NBYTES)) < 0) {                                  \
     return -1;                                                                 \
   }
 
@@ -69,8 +70,18 @@ int readSync_(struct ftdi_context *ftdi, uint8_t *dst, int nBytes) {
 // TODO: Opens first device matching descriptor for now. Allow listing and
 // selecting devices
 int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi) {
-  CALL_FTDI(
-    ftdi_usb_open, "Unable to open ftdi device", CHIP_VENDOR, CHIP_PRODUCT);
+
+  {
+    int ret;
+    if ((ret = ftdi_usb_open(ftdi, CHIP_VENDOR, CHIP_PRODUCT)) != 0) {
+      logMessage(LOG_ERROR,
+                 "Unable to open ftdi device: %d (%s)\n",
+                 ret,
+                 ftdi_get_error_string(ftdi));
+      ftdi_free(ftdi);
+      return -1;
+    }
+  }
 
   // Steps following the oficial guide to setup MPSSE
   //------------------------------

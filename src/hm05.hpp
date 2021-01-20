@@ -9,6 +9,9 @@
 #define LOG_INFO  1
 #define LOG_ERROR 2
 
+// User must implement this function
+void logMessage(int logLevel, const char *formatString, ...);
+
 int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi);
 
 #endif
