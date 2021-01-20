@@ -1,0 +1,13 @@
+﻿---
+BasedOnStyle: LLVM
+ColumnLimit: '80'
+UseTab: Never
+SortIncludes: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortLoopsOnASingleLine: false
+BinPackParameters: false
+BinPackArguments: false
+ContinuationIndentWidth: 2
+IndentCaseLabels: true
+AlignConsecutiveMacros: true
+...
