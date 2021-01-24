@@ -20,6 +20,7 @@
 
 #define OUT_BUFFER_SIZE 4 * 1024 * 1024
 
+#pragma pack(push,1)
 struct CFIQueryStruct {
   char magicQRY[3];                           // "QRY"
   uint16_t controlInterfaceId;                // (See JEP137)
@@ -38,6 +39,7 @@ struct CFIQueryStruct {
   uint16_t maximumBytesInMultibyteProgram; // 2^n bytes
   uint8_t numberOfEraseBlockRegions;
 };
+#pragma pack(pop)
 
 struct CartCommContext {
   ftdi_context *ftdi;

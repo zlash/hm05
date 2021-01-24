@@ -21,7 +21,7 @@
 #define UNSET_BITS(DST, BITS) ((DST) & (~(BITS)))
 
 const uint8_t ADBUSDirections = 0x1B;
-const int latencyMs = 2;
+const int latencyMs = 20;
 
 enum SST39VF168XCommand {
   SST_CHIP_ID,
@@ -42,7 +42,6 @@ enum SST39VF168XCommand {
       return -1;                                                               \
     }                                                                          \
   }
-
 
 #define CALL_FTDI(CMD, ERROR, ...)                                             \
   {                                                                            \
@@ -228,6 +227,7 @@ void dumpCFIQueryStructToLog(const CFIQueryStruct *cfiqs) {
 
   logMessage(LOG_INFO,
              "CFI Reported device size: %d bytes (%d MiB)",
+             sizeBytes,
              sizeBytes / (1024 * 1024));
 }
 
@@ -265,14 +265,6 @@ int readCFIQueryStruct(CartCommContext *ccc) {
     return -1;
   }
 
-  // DELETE
-  for (int i = 0; i < sizeof(CFIQueryStruct); i++) {
-    const uint8_t c = ((uint8_t *)cfiqs)[i];
-    logMessage(LOG_INFO, "%x %c", c, c);
-  }
-
-  dumpCFIQueryStructToLog(cfiqs);
-
   if (cfiqs->magicQRY[0] != 'Q' || cfiqs->magicQRY[1] != 'R' ||
       cfiqs->magicQRY[2] != 'Y') {
     logMessage(LOG_ERROR, "CFI query failed");
@@ -285,9 +277,10 @@ int readCFIQueryStruct(CartCommContext *ccc) {
 int powerOn(CartCommContext *ccc) {
   if (!ccc->poweredOn) {
     setLowDataBits(ccc, SET_BITS(ccc->lowDataBits, CS_BIT));
-    setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT | POWER_BIT));
     sleepMs(10);
+    setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT | POWER_BIT));
     setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT));
+    sleepMs(10);
     ccc->poweredOn = 1;
   }
 }
@@ -394,16 +387,16 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
   assertInBufferEmpty();
 
   // Use 60MHz master clock (disable divide by 5)
-  //enqueueByteOut(ccc, 0x8A);
+  // enqueueByteOut(ccc, 0x8A);
 
   // Turn off adaptive clocking
-  //enqueueByteOut(ccc, 0x97);
+  // enqueueByteOut(ccc, 0x97);
 
   // Disable three phase clocking
-  //enqueueByteOut(ccc, 0x8D);
+  // enqueueByteOut(ccc, 0x8D);
 
-  //flushOut(ccc);
-  //assertInBufferEmpty();
+  // flushOut(ccc);
+  // assertInBufferEmpty();
 
   // Set TCK/SK Clock divisor
   // TCK/SK period = 60MHz  /  (( 1 +[ (0xValueH * 256) OR 0xValueL] ) * 2)
@@ -421,7 +414,7 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
   // Power on!
   powerOn(ccc);
   assertInBufferEmpty();
-    logMessage(LOG_INFO, "Flasher power on");
+  logMessage(LOG_INFO, "Flasher power on");
 
   // Check chip info
   if (readChipId(ccc) < 0) {
@@ -429,13 +422,22 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
     return -1;
   }
 
-  logMessage(LOG_INFO,
-             "Chip Id bytes: %X %X %X",
-             ccc->chipId[0],
-             ccc->chipId[1],
-             ccc->chipId[2]);
+  logMessage(LOG_INFO, "Chip Manufacturer Id: %X", ccc->chipId[0]);
+  logMessage(LOG_INFO, "Chip Device Id: %X", ccc->chipId[1]);
 
-  if (readCFIQueryStruct(ccc) < 1) {
+  // TODO: Might need refactor if different chips are used
+  // Validate Chip Id Info
+  if (ccc->chipId[0] != 0xBF) {
+    logMessage(LOG_ERROR, "Wrong chip manufacturer.");
+    return -1;
+  }
+
+  if (ccc->chipId[1] != 0xC8) {
+    logMessage(LOG_ERROR, "Wrong chip manufacturer.");
+    return -1;
+  }
+
+  if (readCFIQueryStruct(ccc) < 0) {
     logMessage(LOG_ERROR, "Read CFI Query Struct failed");
     return -1;
   }
