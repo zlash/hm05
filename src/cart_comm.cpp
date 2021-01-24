@@ -21,7 +21,7 @@
 #define UNSET_BITS(DST, BITS) ((DST) & (~(BITS)))
 
 const uint8_t ADBUSDirections = 0x1B;
-const int latencyMs = 10;
+const int latencyMs = 2;
 
 enum SST39VF168XCommand {
   SST_CHIP_ID,
@@ -82,8 +82,6 @@ inline int flushIn(CartCommContext *ccc) {
   uint8_t bytesRead = 0;
 
   uint8_t buff[flushBlockSize];
-
-  sleepMs(500);
 
   for (;;) {
     int ret = ftdi_read_data(ftdi, buff, flushBlockSize);
@@ -161,7 +159,7 @@ int readFlash(CartCommContext *ccc, uint16_t addr, uint8_t *dst, int nBytes) {
   enqueueByteOut(ccc, 0x87);
 
   flushIn(ccc);
-  sleepMs(50);
+  sleepMs(10);
   flushOut(ccc);
   readSync(dst, nBytes);
   return 0;
@@ -191,23 +189,11 @@ void enqueueFlashOut(CartCommContext *ccc, uint16_t addr, uint8_t data) {
   enqueueByteOut(ccc, (addr >> 8) & 0xFF);
   enqueueByteOut(ccc, addr & 0xFF);
   enqueueByteOut(ccc, data);
-
-  //enqueueByteOut(ccc, 0x8F);
-  //enqueueByteOut(ccc, 40);
-  //enqueueByteOut(ccc, 0);
-
-  /*
-        cmdBuffer[PosCmdBuf++] = 0x8F;
-      cmdBuffer[PosCmdBuf++] = 4*waitcycles-1;
-      cmdBuffer[PosCmdBuf++] = 0x00;*/
 }
 
 int writeSST39VF168XCommand(CartCommContext *ccc, SST39VF168XCommand command) {
   assert(command < SST_END);
   auto ftdi = ccc->ftdi;
-
-  //setLowDataBits(ccc, SET_BITS(ccc->lowDataBits, CS_BIT));
-  //sleepMs(100);
 
   // All comands share this first two address/data combinations
   enqueueFlashOut(ccc, 0xAAA, 0xAA);
@@ -226,9 +212,6 @@ int writeSST39VF168XCommand(CartCommContext *ccc, SST39VF168XCommand command) {
   }
   flushOut(ccc);
   assertInBufferEmpty();
-
-  //setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT));
-  //sleepMs(100);
 
   return 0;
 }
