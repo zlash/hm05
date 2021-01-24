@@ -4,14 +4,13 @@
 #include <ftdi.h>
 #include <cassert>
 
-#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
+#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
 #define IS_POSIX
 #include <time.h>
 
-#elif 
-#error Add Non-Posix support 
-#endif 
-
+#elif
+#error Add Non-Posix support
+#endif
 
 #define VERSION_STRING "v0.0.1"
 
@@ -19,8 +18,16 @@
 #define LOG_ERROR 2
 
 #define OUT_BUFFER_SIZE 4 * 1024 * 1024
+#define ROM_BUFFER_SIZE 2 * 1024 * 1024
 
-#pragma pack(push,1)
+#pragma pack(push, 1)
+
+struct CFIBlockRegion {
+  uint16_t nBlocks;
+  uint16_t blockSize; // Size in bytes obtained shifting << 8
+};
+
+// TODO: Assuming little-endian types
 struct CFIQueryStruct {
   char magicQRY[3];                           // "QRY"
   uint16_t controlInterfaceId;                // (See JEP137)
@@ -46,10 +53,13 @@ struct CartCommContext {
   uint8_t outBuffer[OUT_BUFFER_SIZE];
   int outBufferPos;
   CFIQueryStruct cfiqs;
+  CFIBlockRegion blockRegions[256];
   uint8_t lowDataBits;
   uint8_t poweredOn;
   uint8_t mpsseOn;
   uint8_t chipId[3];
+  uint8_t romBuffer[ROM_BUFFER_SIZE];
+  uint32_t biggestBlockSizeBytes;
 };
 
 // User must implement this function
@@ -58,7 +68,6 @@ void logMessage(int logLevel, const char *formatString, ...);
 int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc);
 int powerOn(CartCommContext *ccc);
 int powerOff(CartCommContext *ccc);
-
 
 void sleepMs(unsigned int ms);
 

@@ -1,6 +1,11 @@
-#include "hm05.hpp"
 #include <cstdio>
-#include <stdarg.h>
+#include <cstdarg>
+#include <cstring>
+#include "hm05.hpp"
+
+#define OPTPARSE_IMPLEMENTATION
+#define OPTPARSE_API static
+#include "optparse.h"
 
 const int logBufferLength = 5000;
 char logBuffer[logBufferLength];
@@ -13,18 +18,70 @@ void logMessage(int logLevel, const char *formatString, ...) {
   fprintf(logLevel == LOG_ERROR ? stderr : stdout, "%s\n", logBuffer);
 }
 
-int main(void) {
-  struct ftdi_context *ftdi = ftdi_new();
-  CartCommContext ccc;
-  if (ftdi == 0) {
-    return -1;
+void usageMessage(void) {
+  printf("Usage: hm05 <command> [<args>]\n"
+         "\n"
+         " hm05 read output-file         Read from cart to output-file\n"
+         "\n"
+         " hm05 write input-file         Write to cart input-file contents\n"
+         "\n"
+         " General options: \n"
+         "  -h, --help                   Print this help message\n");
+}
+
+int main(int argc, char *argv[]) {
+
+  struct optparse_long longopts[] = {{"help", 'h', OPTPARSE_NONE},
+                                     /*  {"brief", 'b', OPTPARSE_NONE},
+                                       {"color", 'c', OPTPARSE_REQUIRED},
+                                       {"delay", 'd', OPTPARSE_OPTIONAL},*/
+                                     {0}};
+
+  char mode = 0; // r: read, w: write
+
+  if (argc < 2) {
+    usageMessage();
+    return 0;
   }
+
+  if (strcmp(argv[1], "write") == 0) {
+    mode = 'w';
+  }
+  if (strcmp(argv[1], "read") == 0) {
+    mode = 'r';
+  }
+
+  if (!mode) {
+    usageMessage();
+    return 1;
+  }
+
+  struct optparse options;
+  optparse_init(&options, argv + 1);
+
+  int option;
+  while ((option = optparse_long(&options, longopts, NULL)) != -1) {
+    switch (option) {
+      case 'h':
+        usageMessage();
+        return 0;
+    }
+  }
+
+  struct ftdi_context *ftdi = ftdi_new();
+
+  if (ftdi == 0) {
+    return 1;
+  }
+
+  CartCommContext ccc;
 
   if (openDeviceAndSetupMPSSE(ftdi, &ccc) < 0) {
     powerOff(&ccc);
-    return -1;
+    return 1;
   }
 
+  powerOff(&ccc);
   return 0;
 }
 

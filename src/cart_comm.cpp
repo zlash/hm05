@@ -65,7 +65,7 @@ inline void enqueueByteOut(CartCommContext *ccc, uint8_t byte) {
 inline int flushOut(CartCommContext *ccc) {
   assert(ccc->outBufferPos > 0);
   auto ftdi = ccc->ftdi;
-  logMessage(LOG_INFO, "FB: %X", ccc->outBuffer[0]);
+  // logMessage(LOG_INFO, "FB: %X", ccc->outBuffer[0]);
   CALL_FTDI(ftdi_write_data,
             "Unable to write data to device",
             ccc->outBuffer,
@@ -216,19 +216,33 @@ int writeSST39VF168XCommand(CartCommContext *ccc, SST39VF168XCommand command) {
 }
 
 // TODO: Dump the rest of the fields
-void dumpCFIQueryStructToLog(const CFIQueryStruct *cfiqs) {
+void dumpCFIDataToLog(const CartCommContext *ccc) {
+  auto cfiqs = &ccc->cfiqs;
   const int64_t sizeBytes = 1 << cfiqs->deviceSize;
 
   logMessage(LOG_INFO,
-             "Magic Header: %c%c%c",
+             "Flash CFI Magic Header: %c%c%c",
              cfiqs->magicQRY[0],
              cfiqs->magicQRY[1],
              cfiqs->magicQRY[2]);
 
   logMessage(LOG_INFO,
-             "CFI Reported device size: %d bytes (%d MiB)",
+             "Flash CFI Reported device size: %d bytes (%d MiB)",
              sizeBytes,
              sizeBytes / (1024 * 1024));
+
+  logMessage(
+    LOG_INFO, "Number of block regions: %d", cfiqs->numberOfEraseBlockRegions);
+  for (int i = 0; i < cfiqs->numberOfEraseBlockRegions; i++) {
+    logMessage(LOG_INFO, "Block region #%d", i + 1);
+    logMessage(
+      LOG_INFO, "\tBlock size: %d bytes", ccc->blockRegions[i].blockSize << 8);
+    logMessage(
+      LOG_INFO, "\tBlocks in region: %d", ccc->blockRegions[i].nBlocks);
+  }
+
+  logMessage(
+    LOG_INFO, "Using block size: %d bytes", ccc->biggestBlockSizeBytes);
 }
 
 int readChipId(CartCommContext *ccc) {
@@ -237,7 +251,7 @@ int readChipId(CartCommContext *ccc) {
   }
 
   if (readFlash(ccc, 0x0, ccc->chipId, 3) < 0) {
-    logMessage(LOG_ERROR, "CFI Query struct flash read failed.");
+    logMessage(LOG_ERROR, "Chip Id read failed.");
     return -1;
   }
 
@@ -257,7 +271,16 @@ int readCFIQueryStruct(CartCommContext *ccc) {
   }
 
   if (readFlash(ccc, 0x10, (uint8_t *)cfiqs, sizeof(CFIQueryStruct)) < 0) {
-    logMessage(LOG_ERROR, "CFI Query struct flash read failed.");
+    logMessage(LOG_ERROR, "Flash CFI Query struct flash read failed.");
+    return -1;
+  }
+
+  if (readFlash(ccc,
+                0x2D,
+                (uint8_t *)ccc->blockRegions,
+                sizeof(CFIBlockRegion) * cfiqs->numberOfEraseBlockRegions) <
+      0) {
+    logMessage(LOG_ERROR, "Flash CFI block regions read failed.");
     return -1;
   }
 
@@ -269,6 +292,17 @@ int readCFIQueryStruct(CartCommContext *ccc) {
       cfiqs->magicQRY[2] != 'Y') {
     logMessage(LOG_ERROR, "CFI query failed");
     return -1;
+  }
+
+  assert(cfiqs->numberOfEraseBlockRegions > 0);
+
+  // Find largest block size and use it
+  ccc->biggestBlockSizeBytes = ccc->blockRegions[0].blockSize << 8;
+  for (int i = 1; i < cfiqs->numberOfEraseBlockRegions; i++) {
+    uint32_t currentSize = ccc->blockRegions[i].blockSize << 8;
+    if (currentSize > ccc->biggestBlockSizeBytes) {
+      ccc->biggestBlockSizeBytes = currentSize;
+    }
   }
 
   return 0;
@@ -283,6 +317,7 @@ int powerOn(CartCommContext *ccc) {
     sleepMs(10);
     ccc->poweredOn = 1;
   }
+  return 0;
 }
 
 int powerOff(CartCommContext *ccc) {
@@ -290,6 +325,7 @@ int powerOff(CartCommContext *ccc) {
     setLowDataBits(ccc, SET_BITS(ccc->lowDataBits, POWER_BIT));
     ccc->poweredOn = 0;
   }
+  return 0;
 }
 
 // TODO: Opens first device matching descriptor for now. Allow listing and
@@ -371,9 +407,6 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
 
   readSync(bogusCommandLoopback, 2);
 
-  logMessage(
-    LOG_INFO, "BOGUS %x %x", bogusCommandLoopback[0], bogusCommandLoopback[1]);
-
   if (bogusCommandLoopback[0] != 0xFA || bogusCommandLoopback[1] != 0xAB) {
     logMessage(LOG_ERROR, "MPSSE Sync Failed");
     return -1;
@@ -414,26 +447,26 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
   // Power on!
   powerOn(ccc);
   assertInBufferEmpty();
-  logMessage(LOG_INFO, "Flasher power on");
+  logMessage(LOG_INFO, "Programmer powered on");
 
   // Check chip info
   if (readChipId(ccc) < 0) {
-    logMessage(LOG_ERROR, "Chip ID Read Failed");
+    logMessage(LOG_ERROR, "Flash chip ID Read Failed");
     return -1;
   }
 
-  logMessage(LOG_INFO, "Chip Manufacturer Id: %X", ccc->chipId[0]);
-  logMessage(LOG_INFO, "Chip Device Id: %X", ccc->chipId[1]);
+  logMessage(LOG_INFO, "Flash chip Manufacturer Id: %X", ccc->chipId[0]);
+  logMessage(LOG_INFO, "Flash chip Device Id: %X", ccc->chipId[1]);
 
   // TODO: Might need refactor if different chips are used
   // Validate Chip Id Info
   if (ccc->chipId[0] != 0xBF) {
-    logMessage(LOG_ERROR, "Wrong chip manufacturer.");
+    logMessage(LOG_ERROR, "Wrong chip manufacturer");
     return -1;
   }
 
   if (ccc->chipId[1] != 0xC8) {
-    logMessage(LOG_ERROR, "Wrong chip manufacturer.");
+    logMessage(LOG_ERROR, "Wrong chip manufacturer");
     return -1;
   }
 
@@ -442,9 +475,9 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
     return -1;
   }
 
-  dumpCFIQueryStructToLog(&ccc->cfiqs);
+  dumpCFIDataToLog(ccc);
 
-  logMessage(LOG_INFO, "Flash chip ready.");
+  logMessage(LOG_INFO, "Flash chip ready");
 
   return 0;
 }
