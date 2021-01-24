@@ -15,14 +15,26 @@ void logMessage(int logLevel, const char *formatString, ...) {
 
 int main(void) {
   struct ftdi_context *ftdi = ftdi_new();
-
+  CartCommContext ccc;
   if (ftdi == 0) {
     return -1;
   }
 
-  if (openDeviceAndSetupMPSSE(ftdi) < 0) {
+  if (openDeviceAndSetupMPSSE(ftdi, &ccc) < 0) {
+    powerOff(&ccc);
     return -1;
   }
 
   return 0;
 }
+
+#ifdef IS_POSIX
+
+void sleepMs(unsigned int ms) {
+  unsigned int secs = ms / 1000;
+  unsigned int nanoSecs = (ms - (secs * 1000)) * 1000 * 1000;
+  timespec req = {secs, nanoSecs};
+  nanosleep(&req, nullptr);
+}
+
+#endif
