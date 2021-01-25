@@ -56,11 +56,7 @@ CartCommContext ccc;
 
 int main(int argc, char *argv[]) {
 
-  struct optparse_long longopts[] = {{"help", 'h', OPTPARSE_NONE},
-                                     /*  {"brief", 'b', OPTPARSE_NONE},
-                                       {"color", 'c', OPTPARSE_REQUIRED},
-                                       {"delay", 'd', OPTPARSE_OPTIONAL},*/
-                                     {0}};
+  struct optparse_long longopts[] = {{"help", 'h', OPTPARSE_NONE}, {0}};
 
   char mode = 0; // r: read, w: write
 
