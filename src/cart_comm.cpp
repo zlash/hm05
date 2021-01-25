@@ -1,4 +1,5 @@
 #include "hm05.hpp"
+#include <cstring>
 
 #define CHIP_VENDOR  0x0403
 #define CHIP_PRODUCT 0x6010
@@ -27,6 +28,8 @@ enum SST39VF168XCommand {
   SST_CHIP_ID,
   SST_CFI_QUERY_MODE,
   SST_EXIT_TO_READ_MODE,
+  SST_WRITE_BYTE,
+  SST_BLOCK_ERASE,
   SST_END,
 };
 
@@ -56,6 +59,11 @@ enum SST39VF168XCommand {
   }
 
 int setLowDataBits(CartCommContext *ccc, uint8_t bits);
+
+// 64-bits systems only
+inline uint8_t reverseByte(uint8_t b) {
+  return (b * 0x0202020202ULL & 0x010884422010ULL) % 1023;
+}
 
 inline void setCS(CartCommContext *ccc, uint8_t high) {
   if (high) {
@@ -142,7 +150,11 @@ int readSync_(struct ftdi_context *ftdi, uint8_t *dst, int nBytes) {
   return nBytes;
 }
 
-int readFlash(CartCommContext *ccc, uint16_t addr, uint8_t *dst, int nBytes) {
+int readFlash(CartCommContext *ccc,
+              int addr,
+              uint8_t *dst,
+              int nBytes,
+              uint8_t reverseBytes = 0) {
   setCS(ccc, 0);
   sleepMs(1);
 
@@ -181,6 +193,14 @@ int readFlash(CartCommContext *ccc, uint16_t addr, uint8_t *dst, int nBytes) {
     flushOut(ccc);
 
     readSync(dst, bytesToRead);
+
+    // Reverse bytes
+    if (reverseBytes) {
+      for (int i = 0; i < bytesToRead; i++) {
+        dst[i] = reverseByte(dst[i]);
+      }
+    }
+
     dst += bytesToRead;
   }
   return 0;
@@ -194,7 +214,7 @@ int setLowDataBits(CartCommContext *ccc, uint8_t bits) {
   return flushOut(ccc);
 }
 
-void enqueueFlashOut(CartCommContext *ccc, uint16_t addr, uint8_t data) {
+void enqueueFlashOut(CartCommContext *ccc, int addr, uint8_t data) {
   // Clock Data Bytes Out on -ve clock edge MSB first  (no read)
   enqueueByteOut(ccc, 0x11); // Command
   enqueueByteOut(ccc, 0x03); // (NBytes - 1) L
@@ -212,9 +232,11 @@ void enqueueFlashOut(CartCommContext *ccc, uint16_t addr, uint8_t data) {
   enqueueByteOut(ccc, data);
 }
 
-int writeSST39VF168XCommand(CartCommContext *ccc, SST39VF168XCommand command) {
+void enqueueSST39VF168XCommand(CartCommContext *ccc,
+                               SST39VF168XCommand command,
+                               int param1 = 0,
+                               int param2 = 0) {
   assert(command < SST_END);
-  auto ftdi = ccc->ftdi;
 
   // All comands share this first two address/data combinations
   enqueueFlashOut(ccc, 0xAAA, 0xAA);
@@ -230,7 +252,24 @@ int writeSST39VF168XCommand(CartCommContext *ccc, SST39VF168XCommand command) {
     case SST_EXIT_TO_READ_MODE:
       enqueueFlashOut(ccc, 0xAAA, 0xF0);
       break;
+    case SST_WRITE_BYTE:
+      enqueueFlashOut(ccc, 0xAAA, 0xA0);
+      enqueueFlashOut(ccc, param1, reverseByte(param2));
+      break;
+    case SST_BLOCK_ERASE:
+      enqueueFlashOut(ccc, 0xAAA, 0x80);
+      enqueueFlashOut(ccc, 0xAAA, 0xAA);
+      enqueueFlashOut(ccc, 0x555, 0x55);
+      enqueueFlashOut(ccc, param1, 0x30);
+      break;
   }
+}
+
+int writeSST39VF168XCommand(CartCommContext *ccc,
+                            SST39VF168XCommand command,
+                            int param1 = 0,
+                            int param2 = 0) {
+  enqueueSST39VF168XCommand(ccc, command, param1, param2);
 
   flushOut(ccc);
   assertInBufferEmpty();
@@ -331,6 +370,7 @@ int readCFIQueryStruct(CartCommContext *ccc) {
 
   return 0;
 }
+
 int powerOn(CartCommContext *ccc) {
   if (!ccc->poweredOn) {
     setCS(ccc, 1);
@@ -349,6 +389,73 @@ int powerOff(CartCommContext *ccc) {
   return 0;
 }
 
+int writeRom(CartCommContext *ccc, int romSize) {
+  // NOTE: Refactor if bigger chip size is ever used
+  assert((1 << ccc->cfiqs.deviceSize) <= ROM_BUFFER_SIZE);
+  assert(romSize <= ROM_BUFFER_SIZE);
+
+  int blockNumber = 0;
+  int addr = 0;
+  uint8_t *src = ccc->romBuffer;
+  int remainingBytes = romSize;
+
+  uint8_t *readBackBuffer = new uint8_t[ccc->biggestBlockSizeBytes];
+
+  logMessage(LOG_INFO, "Writing %d bytes", romSize);
+  while (remainingBytes > 0) {
+    const int bytesToWrite = remainingBytes > ccc->biggestBlockSizeBytes
+                               ? ccc->biggestBlockSizeBytes
+                               : remainingBytes;
+    remainingBytes -= bytesToWrite;
+
+    // Erase block
+    //------------------------------
+    writeSST39VF168XCommand(ccc, SST_BLOCK_ERASE, addr, 0);
+    logMessage(LOG_INFO, "ROM Block %d erased", blockNumber + 1);
+
+    // Write block
+    //------------------------------
+
+    for (int i = 0; i < bytesToWrite; i++) {
+      enqueueSST39VF168XCommand(ccc, SST_WRITE_BYTE, addr + i, src[i]);
+    }
+
+    if (flushOut(ccc) < 0) {
+      logMessage(LOG_ERROR, "ROM block %d write failed", blockNumber + 1);
+      return -1;
+    }
+
+    assertInBufferEmpty();
+    logMessage(LOG_INFO, "ROM Block %d written", blockNumber + 1);
+
+    // Read back block
+    //------------------------------
+    if (readFlash(ccc, addr, readBackBuffer, bytesToWrite, 1) < 0) {
+      logMessage(
+        LOG_ERROR, "ROM block %d verification read failed", blockNumber + 1);
+      return -1;
+    }
+
+    // Verify
+    //------------------------------
+    if (memcmp(readBackBuffer, src, bytesToWrite) != 0) {
+      logMessage(
+        LOG_ERROR, "ROM block %d verification failed", blockNumber + 1);
+      // return -1;
+    }
+
+    logMessage(LOG_INFO, "ROM Block %d verified", blockNumber + 1);
+    blockNumber++;
+
+    src += bytesToWrite;
+    addr += bytesToWrite;
+  }
+
+  delete[] readBackBuffer;
+
+  logMessage(LOG_INFO, "ROM write completed");
+}
+
 int readRom(CartCommContext *ccc) {
   // TODO: Refactor if bigger chip size is ever used
   assert((1 << ccc->cfiqs.deviceSize) <= ROM_BUFFER_SIZE);
@@ -357,19 +464,20 @@ int readRom(CartCommContext *ccc) {
   for (int i = 0; i < numBlocks; i++) {
     const int addr = i * ccc->biggestBlockSizeBytes;
     if (readFlash(
-          ccc, addr, &ccc->romBuffer[addr], ccc->biggestBlockSizeBytes) < 0) {
-      logMessage(LOG_ERROR, "Flash CFI block regions read failed");
+          ccc, addr, &ccc->romBuffer[addr], ccc->biggestBlockSizeBytes, 1) <
+        0) {
+      logMessage(LOG_ERROR, "Cart ROM read failed");
       return -1;
     }
     logMessage(LOG_INFO, "Read block: %d/%d", i + 1, numBlocks);
   }
+
   logMessage(LOG_INFO, "ROM read completed");
 }
 
 // TODO: Opens first device matching descriptor for now. Allow listing and
 // selecting devices
 int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
-
   ftdi->usb_write_timeout = 10000;
   ftdi->usb_read_timeout = 10000;
   // Init context
@@ -478,9 +586,9 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
   // Set TCK/SK Clock divisor
   // TODO: This is different if divide by 5 was disabled (60Mhz)
   // TCK/SK period = 12MHz  /  (( 1 +[ (0xValueH * 256) OR 0xValueL] ) * 2)
-  // For 6MHz: 0x0000
+  // For 3MHz: 0x0000
   enqueueByteOut(ccc, 0x86); // Command
-  enqueueByteOut(ccc, 0x00); // ValueL
+  enqueueByteOut(ccc, 0x01); // ValueL
   enqueueByteOut(ccc, 0x00); // ValueH
   flushOut(ccc);
   assertInBufferEmpty();

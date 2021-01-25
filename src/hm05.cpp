@@ -82,14 +82,25 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  readRom(&ccc);
-  powerOff(&ccc);
+  //readRom(&ccc);
 
-  FILE *f = fopen("/tmp/000_zlash/rom.min", "wb");
-  fwrite(ccc.romBuffer, 1, ROM_BUFFER_SIZE, f);
-  fflush(f);
+  FILE *f = fopen("/tmp/000_zlash/cards.min", "rb");
+  fseek(f, 0, SEEK_END);
+  const int romSize = ftell(f);
+  fseek(f, 0L, SEEK_SET);
+  fread(ccc.romBuffer, 1, romSize, f);
   fclose(f);
 
+  writeRom(&ccc, romSize);
+
+  powerOff(&ccc);
+
+  /*
+    FILE *f = fopen("/tmp/000_zlash/rom.min", "wb");
+    fwrite(ccc.romBuffer, 1, ROM_BUFFER_SIZE, f);
+    fflush(f);
+    fclose(f);
+  */
   return 0;
 }
 

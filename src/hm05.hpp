@@ -23,7 +23,7 @@
 #pragma pack(push, 1)
 
 struct CFIBlockRegion {
-  uint16_t nBlocks; // Number of blocks in region - 1
+  uint16_t nBlocks;   // Number of blocks in region - 1
   uint16_t blockSize; // Size in bytes obtained shifting << 8
 };
 
@@ -70,6 +70,7 @@ int powerOn(CartCommContext *ccc);
 int powerOff(CartCommContext *ccc);
 
 int readRom(CartCommContext *ccc);
+int writeRom(CartCommContext *ccc, int romSize);
 
 void sleepMs(unsigned int ms);
 
