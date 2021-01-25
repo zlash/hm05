@@ -1,3 +1,25 @@
+/*
+Copyright (c) 2021 Miguel Ángel Pérez Martínez
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
@@ -71,6 +93,12 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  // If filename was not passed
+  if (options.optind + 1 >= argc) {
+    usageMessage();
+    return 0;
+  }
+
   struct ftdi_context *ftdi = ftdi_new();
 
   if (ftdi == 0) {
@@ -82,25 +110,43 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  //readRom(&ccc);
+  FILE *f;
+  const auto filename = argv[options.optind + 1];
+  switch (mode) {
+    case 'r':
+      f = fopen(filename, "wb");
+      if (!f) {
+        logMessage(LOG_ERROR, "Cannot open file %s for writing", filename);
+        powerOff(&ccc);
+        return -1;
+      }
 
-  FILE *f = fopen("/tmp/000_zlash/cards.min", "rb");
-  fseek(f, 0, SEEK_END);
-  const int romSize = ftell(f);
-  fseek(f, 0L, SEEK_SET);
-  fread(ccc.romBuffer, 1, romSize, f);
-  fclose(f);
+      logMessage(LOG_INFO, "Reading ROM to %s", filename);
+      readRom(&ccc);
 
-  writeRom(&ccc, romSize);
+      fwrite(ccc.romBuffer, 1, ROM_BUFFER_SIZE, f);
+      fflush(f);
+      fclose(f);
+      break;
+    case 'w':
+      f = fopen(filename, "rb");
+      if (!f) {
+        logMessage(LOG_ERROR, "Cannot open file %s", filename);
+        powerOff(&ccc);
+        return -1;
+      }
+      fseek(f, 0, SEEK_END);
+      const int romSize = ftell(f);
+      fseek(f, 0L, SEEK_SET);
+      fread(ccc.romBuffer, 1, romSize, f);
+      fclose(f);
+
+      logMessage(LOG_INFO, "Writting ROM to %s", filename);
+      writeRom(&ccc, romSize);
+      break;
+  }
 
   powerOff(&ccc);
-
-  /*
-    FILE *f = fopen("/tmp/000_zlash/rom.min", "wb");
-    fwrite(ccc.romBuffer, 1, ROM_BUFFER_SIZE, f);
-    fflush(f);
-    fclose(f);
-  */
   return 0;
 }
 
