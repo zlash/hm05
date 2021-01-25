@@ -21,7 +21,7 @@
 #define UNSET_BITS(DST, BITS) ((DST) & (~(BITS)))
 
 const uint8_t ADBUSDirections = 0x1B;
-const int latencyMs = 20;
+const int latencyMs = 2;
 
 enum SST39VF168XCommand {
   SST_CHIP_ID,
@@ -57,6 +57,15 @@ enum SST39VF168XCommand {
 
 int setLowDataBits(CartCommContext *ccc, uint8_t bits);
 
+inline void setCS(CartCommContext *ccc, uint8_t high) {
+  if (high) {
+    setLowDataBits(ccc, SET_BITS(ccc->lowDataBits, CS_BIT));
+  } else {
+    setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT));
+  }
+  sleepMs(1);
+}
+
 inline void enqueueByteOut(CartCommContext *ccc, uint8_t byte) {
   assert(ccc->outBufferPos < OUT_BUFFER_SIZE);
   ccc->outBuffer[ccc->outBufferPos++] = byte;
@@ -65,7 +74,6 @@ inline void enqueueByteOut(CartCommContext *ccc, uint8_t byte) {
 inline int flushOut(CartCommContext *ccc) {
   assert(ccc->outBufferPos > 0);
   auto ftdi = ccc->ftdi;
-  // logMessage(LOG_INFO, "FB: %X", ccc->outBuffer[0]);
   CALL_FTDI(ftdi_write_data,
             "Unable to write data to device",
             ccc->outBuffer,
@@ -135,32 +143,46 @@ int readSync_(struct ftdi_context *ftdi, uint8_t *dst, int nBytes) {
 }
 
 int readFlash(CartCommContext *ccc, uint16_t addr, uint8_t *dst, int nBytes) {
+  setCS(ccc, 0);
+  sleepMs(1);
+
   auto ftdi = ccc->ftdi;
-  for (int i = 0; i < nBytes; i++) {
-    // Clock Data Bytes Out on -ve clock edge MSB first  (no read)
-    enqueueByteOut(ccc, 0x11); // Command
-    enqueueByteOut(ccc, 0x02); // (NBytes - 1) L
-    enqueueByteOut(ccc, 0x00); // (NBytes - 1) H
 
-    // Load 3 bytes address
-    enqueueByteOut(ccc, (addr >> 16) & 0x1F);
-    enqueueByteOut(ccc, (addr >> 8) & 0xFF);
-    enqueueByteOut(ccc, addr & 0xFF);
+  // It seems that until I read from the device, the buffer keeps filling
+  // and when it's full, the write fails.
+  // The buffer is quite small so read requests need to be splitted
 
-    // Clock Data Bytes In on -ve clock edge MSB first (no write)
-    enqueueByteOut(ccc, 0x24); // Command
-    enqueueByteOut(ccc, 0x00); // (NBytes - 1) L
-    enqueueByteOut(ccc, 0x00); // (NBytes - 1) H
-    addr++;
+  const int readRequestSize = 256;
+
+  while (nBytes > 0) {
+    const int bytesToRead = nBytes > readRequestSize ? readRequestSize : nBytes;
+    nBytes -= bytesToRead;
+
+    for (int i = 0; i < bytesToRead; i++) {
+      // Clock Data Bytes Out on -ve clock edge MSB first  (no read)
+      enqueueByteOut(ccc, 0x11); // Command
+      enqueueByteOut(ccc, 0x02); // (NBytes - 1) L
+      enqueueByteOut(ccc, 0x00); // (NBytes - 1) H
+
+      // Load 3 bytes address
+      enqueueByteOut(ccc, (addr >> 16) & 0x1F);
+      enqueueByteOut(ccc, (addr >> 8) & 0xFF);
+      enqueueByteOut(ccc, addr & 0xFF);
+
+      // Clock Data Bytes In on -ve clock edge MSB first (no write)
+      enqueueByteOut(ccc, 0x24); // Command
+      enqueueByteOut(ccc, 0x00); // (NBytes - 1) L
+      enqueueByteOut(ccc, 0x00); // (NBytes - 1) H
+      addr++;
+    }
+
+    // Force receive current readbuffer contents from chip
+    enqueueByteOut(ccc, 0x87);
+    flushOut(ccc);
+
+    readSync(dst, bytesToRead);
+    dst += bytesToRead;
   }
-
-  // Force receive current readbuffer contents from chip
-  enqueueByteOut(ccc, 0x87);
-
-  flushIn(ccc);
-  sleepMs(10);
-  flushOut(ccc);
-  readSync(dst, nBytes);
   return 0;
 }
 
@@ -209,8 +231,10 @@ int writeSST39VF168XCommand(CartCommContext *ccc, SST39VF168XCommand command) {
       enqueueFlashOut(ccc, 0xAAA, 0xF0);
       break;
   }
+
   flushOut(ccc);
   assertInBufferEmpty();
+  sleepMs(1);
 
   return 0;
 }
@@ -238,7 +262,7 @@ void dumpCFIDataToLog(const CartCommContext *ccc) {
     logMessage(
       LOG_INFO, "\tBlock size: %d bytes", ccc->blockRegions[i].blockSize << 8);
     logMessage(
-      LOG_INFO, "\tBlocks in region: %d", ccc->blockRegions[i].nBlocks);
+      LOG_INFO, "\tBlocks in region: %d", ccc->blockRegions[i].nBlocks + 1);
   }
 
   logMessage(
@@ -307,14 +331,11 @@ int readCFIQueryStruct(CartCommContext *ccc) {
 
   return 0;
 }
-
 int powerOn(CartCommContext *ccc) {
   if (!ccc->poweredOn) {
-    setLowDataBits(ccc, SET_BITS(ccc->lowDataBits, CS_BIT));
-    sleepMs(10);
-    setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT | POWER_BIT));
-    setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, CS_BIT));
-    sleepMs(10);
+    setCS(ccc, 1);
+    setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, POWER_BIT));
+    setCS(ccc, 0);
     ccc->poweredOn = 1;
   }
   return 0;
@@ -328,10 +349,29 @@ int powerOff(CartCommContext *ccc) {
   return 0;
 }
 
+int readRom(CartCommContext *ccc) {
+  // TODO: Refactor if bigger chip size is ever used
+  assert((1 << ccc->cfiqs.deviceSize) <= ROM_BUFFER_SIZE);
+
+  int numBlocks = (1 << ccc->cfiqs.deviceSize) / ccc->biggestBlockSizeBytes;
+  for (int i = 0; i < numBlocks; i++) {
+    const int addr = i * ccc->biggestBlockSizeBytes;
+    if (readFlash(
+          ccc, addr, &ccc->romBuffer[addr], ccc->biggestBlockSizeBytes) < 0) {
+      logMessage(LOG_ERROR, "Flash CFI block regions read failed");
+      return -1;
+    }
+    logMessage(LOG_INFO, "Read block: %d/%d", i + 1, numBlocks);
+  }
+  logMessage(LOG_INFO, "ROM read completed");
+}
+
 // TODO: Opens first device matching descriptor for now. Allow listing and
 // selecting devices
 int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
 
+  ftdi->usb_write_timeout = 10000;
+  ftdi->usb_read_timeout = 10000;
   // Init context
   ccc->mpsseOn = 0;
   ccc->poweredOn = 0;
@@ -375,8 +415,7 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
   CALL_FTDI(ftdi_set_latency_timer, "Unable to set latency", latencyMs);
 
   // Turn on flow control so no read requests are generated while buffer is full
-  // CALL_FTDI(ftdi_setflowctrl, "Unable to turn on flow control",
-  // SIO_RTS_CTS_HS);
+  CALL_FTDI(ftdi_setflowctrl, "Unable to turn on flow control", SIO_RTS_CTS_HS);
 
   // Reset controller
   CALL_FTDI(ftdi_set_bitmode, "Unable to reset controller", 0x00, 0x00);
@@ -419,23 +458,29 @@ int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc) {
   flushOut(ccc);
   assertInBufferEmpty();
 
+  // My FTDI device doesn't support the following commands
+  // TODO: Try doing a version/feature check and enable them conditionally
+
+  /*
   // Use 60MHz master clock (disable divide by 5)
-  // enqueueByteOut(ccc, 0x8A);
+  enqueueByteOut(ccc, 0x8A);
 
   // Turn off adaptive clocking
-  // enqueueByteOut(ccc, 0x97);
+  enqueueByteOut(ccc, 0x97);
 
   // Disable three phase clocking
-  // enqueueByteOut(ccc, 0x8D);
+  enqueueByteOut(ccc, 0x8D);
 
-  // flushOut(ccc);
-  // assertInBufferEmpty();
+  flushOut(ccc);
+  assertInBufferEmpty();
+  */
 
   // Set TCK/SK Clock divisor
-  // TCK/SK period = 60MHz  /  (( 1 +[ (0xValueH * 256) OR 0xValueL] ) * 2)
-  // For 15MHz: 0x0001
+  // TODO: This is different if divide by 5 was disabled (60Mhz)
+  // TCK/SK period = 12MHz  /  (( 1 +[ (0xValueH * 256) OR 0xValueL] ) * 2)
+  // For 6MHz: 0x0000
   enqueueByteOut(ccc, 0x86); // Command
-  enqueueByteOut(ccc, 0x01); // ValueL
+  enqueueByteOut(ccc, 0x00); // ValueL
   enqueueByteOut(ccc, 0x00); // ValueH
   flushOut(ccc);
   assertInBufferEmpty();

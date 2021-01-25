@@ -23,7 +23,7 @@
 #pragma pack(push, 1)
 
 struct CFIBlockRegion {
-  uint16_t nBlocks;
+  uint16_t nBlocks; // Number of blocks in region - 1
   uint16_t blockSize; // Size in bytes obtained shifting << 8
 };
 
@@ -68,6 +68,8 @@ void logMessage(int logLevel, const char *formatString, ...);
 int openDeviceAndSetupMPSSE(struct ftdi_context *ftdi, CartCommContext *ccc);
 int powerOn(CartCommContext *ccc);
 int powerOff(CartCommContext *ccc);
+
+int readRom(CartCommContext *ccc);
 
 void sleepMs(unsigned int ms);
 

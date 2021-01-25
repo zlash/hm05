@@ -16,6 +16,7 @@ void logMessage(int logLevel, const char *formatString, ...) {
   vsnprintf(logBuffer, logBufferLength, formatString, args);
   va_end(args);
   fprintf(logLevel == LOG_ERROR ? stderr : stdout, "%s\n", logBuffer);
+  fflush(stdout);
 }
 
 void usageMessage(void) {
@@ -28,6 +29,8 @@ void usageMessage(void) {
          " General options: \n"
          "  -h, --help                   Print this help message\n");
 }
+
+CartCommContext ccc;
 
 int main(int argc, char *argv[]) {
 
@@ -74,14 +77,19 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  CartCommContext ccc;
-
   if (openDeviceAndSetupMPSSE(ftdi, &ccc) < 0) {
     powerOff(&ccc);
     return 1;
   }
 
+  readRom(&ccc);
   powerOff(&ccc);
+
+  FILE *f = fopen("/tmp/000_zlash/rom.min", "wb");
+  fwrite(ccc.romBuffer, 1, ROM_BUFFER_SIZE, f);
+  fflush(f);
+  fclose(f);
+
   return 0;
 }
 
