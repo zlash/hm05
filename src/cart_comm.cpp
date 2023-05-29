@@ -284,6 +284,8 @@ void enqueueSST39VF168XCommand(CartCommContext *ccc,
       enqueueFlashOut(ccc, 0x555, 0x55);
       enqueueFlashOut(ccc, param1, 0x30);
       break;
+    case SST_END:
+      break;
   }
 }
 
@@ -348,7 +350,6 @@ int readChipId(CartCommContext *ccc) {
 }
 
 int readCFIQueryStruct(CartCommContext *ccc) {
-  auto ftdi = ccc->ftdi;
   auto cfiqs = &ccc->cfiqs;
 
   if (writeSST39VF168XCommand(ccc, SST_CFI_QUERY_MODE) < 0) {
@@ -397,6 +398,7 @@ int powerOn(CartCommContext *ccc) {
   if (!ccc->poweredOn) {
     setCS(ccc, 1);
     setLowDataBits(ccc, UNSET_BITS(ccc->lowDataBits, POWER_BIT));
+    sleepMs(100);
     setCS(ccc, 0);
     ccc->poweredOn = 1;
   }
@@ -405,6 +407,8 @@ int powerOn(CartCommContext *ccc) {
 
 int powerOff(CartCommContext *ccc) {
   if (ccc->poweredOn) {
+    setCS(ccc, 1);
+    sleepMs(1);
     setLowDataBits(ccc, SET_BITS(ccc->lowDataBits, POWER_BIT));
     ccc->poweredOn = 0;
   }
@@ -425,7 +429,7 @@ int writeRom(CartCommContext *ccc, int romSize) {
 
   logMessage(LOG_INFO, "Writing %d bytes", romSize);
   while (remainingBytes > 0) {
-    const int bytesToWrite = remainingBytes > ccc->biggestBlockSizeBytes
+    const int bytesToWrite = remainingBytes > (int)ccc->biggestBlockSizeBytes
                                ? ccc->biggestBlockSizeBytes
                                : remainingBytes;
     remainingBytes -= bytesToWrite;
@@ -463,7 +467,7 @@ int writeRom(CartCommContext *ccc, int romSize) {
     if (memcmp(readBackBuffer, src, bytesToWrite) != 0) {
       logMessage(
         LOG_ERROR, "ROM block %d verification failed", blockNumber + 1);
-      // return -1;
+      return -1;
     }
 
     logMessage(LOG_INFO, "ROM Block %d verified", blockNumber + 1);
@@ -476,6 +480,7 @@ int writeRom(CartCommContext *ccc, int romSize) {
   delete[] readBackBuffer;
 
   logMessage(LOG_INFO, "ROM write completed");
+  return romSize;
 }
 
 int readRom(CartCommContext *ccc) {
@@ -495,6 +500,7 @@ int readRom(CartCommContext *ccc) {
   }
 
   logMessage(LOG_INFO, "ROM read completed");
+  return numBlocks * ccc->biggestBlockSizeBytes;
 }
 
 // TODO: Opens first device matching descriptor for now. Allow listing and

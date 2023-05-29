@@ -143,6 +143,8 @@ int main(int argc, char *argv[]) {
   }
 
   powerOff(&ccc);
+  ftdi_usb_close(ftdi);
+  ftdi_deinit(ftdi);
   return 0;
 }
 
